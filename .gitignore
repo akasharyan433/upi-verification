@@ -1,0 +1,45 @@
+# Environment variables (IMPORTANT: Keep your secrets safe!)
+.env
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+temp/
+uploads/
+
+# Google Cloud credentials (if any)
+*.json
+service-account-key.json
+
+# Flask instance folder
+instance/
+
+# Coverage reports
+htmlcov/
+.coverage
+.pytest_cache/

@@ -2,6 +2,7 @@ from flask import Flask, render_template, request, redirect, url_for, flash, jso
 import json
 import uuid
 import re
+import base64
 from werkzeug.utils import secure_filename
 import vertexai
 from vertexai.preview.generative_models import GenerativeModel, Part
@@ -17,6 +18,7 @@ app.config.from_object(config[config_name])
 
 # Configuration from config.py
 ALLOWED_EXTENSIONS = app.config['ALLOWED_EXTENSIONS']
+ALLOWED_STATEMENT_EXTENSIONS = app.config.get('ALLOWED_STATEMENT_EXTENSIONS', {'png', 'jpg', 'jpeg', 'webp', 'heic', 'pdf'})
 MAX_FILE_SIZE = app.config['MAX_CONTENT_LENGTH']
 PROJECT_ID = app.config['GCP_PROJECT_ID']
 LOCATION = app.config['GCP_LOCATION']
@@ -24,7 +26,7 @@ LOCATION = app.config['GCP_LOCATION']
 # Performance tracking for JSON parsing strategies
 parsing_stats = {
     "direct": 0,
-    "markdown": 0, 
+    "markdown": 0,
     "bracket": 0,
     "failed": 0
 }
@@ -36,7 +38,7 @@ try:
         raise ValueError("GCP_PROJECT_ID not found in environment variables")
     
     vertexai.init(project=PROJECT_ID, location=LOCATION)
-    model = GenerativeModel("gemini-2.5-flash-lite")
+    model = GenerativeModel("gemini-2.5-flash-lite")  # Supports direct PDF processing
     print(f"✅ Successfully connected to Vertex AI - Project: {PROJECT_ID}, Location: {LOCATION}")
 except Exception as e:
     print(f"❌ Failed to initialize Vertex AI: {str(e)}")
@@ -47,9 +49,14 @@ except Exception as e:
     print("3. Enabled Vertex AI API in your Google Cloud project")
 
 def allowed_file(filename):
-    """Check if uploaded file has allowed extension"""
+    """Check if uploaded file has allowed extension (for tenant - images only)"""
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def allowed_statement_file(filename):
+    """Check if uploaded statement file has allowed extension (including PDF)"""
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_STATEMENT_EXTENSIONS
 
 def parse_gemini_json_response(response_text, context="UPI extraction"):
     """
@@ -57,10 +64,9 @@ def parse_gemini_json_response(response_text, context="UPI extraction"):
     Optimized for response_mime_type="application/json" but with fallbacks
     """
     response_text = response_text.strip()
-    
     print(f"DEBUG: {context} - Raw response length: {len(response_text)}")
     print(f"DEBUG: {context} - Raw response: {response_text}")
-    
+
     # Strategy 1: Direct JSON parsing (should work with response_mime_type)
     try:
         extracted_data = json.loads(response_text)
@@ -69,9 +75,9 @@ def parse_gemini_json_response(response_text, context="UPI extraction"):
         return extracted_data, "direct"
     except json.JSONDecodeError as e:
         print(f"DEBUG: ⚠️ {context} - Strategy 1 failed: {e}")
-    
+
     # Strategy 2: Markdown code block extraction
-    json_pattern = r'```(?:json)?\s*(.*?)\s*```'
+    json_pattern = r'``````'
     match = re.search(json_pattern, response_text, re.DOTALL)
     if match:
         try:
@@ -84,7 +90,7 @@ def parse_gemini_json_response(response_text, context="UPI extraction"):
             print(f"DEBUG: ⚠️ {context} - Strategy 2 found pattern but parsing failed")
     else:
         print(f"DEBUG: ⚠️ {context} - Strategy 2 no code block found")
-    
+
     # Strategy 3: Bracket-based extraction
     try:
         start_idx = response_text.find('{')
@@ -99,7 +105,7 @@ def parse_gemini_json_response(response_text, context="UPI extraction"):
             print(f"DEBUG: ⚠️ {context} - Strategy 3 no valid brackets found")
     except json.JSONDecodeError as e:
         print(f"DEBUG: ⚠️ {context} - Strategy 3 failed: {e}")
-    
+
     # All strategies failed
     print(f"DEBUG: ❌ {context} - All parsing strategies failed")
     parsing_stats["failed"] += 1
@@ -138,14 +144,13 @@ def extract_upi_data_from_file(image_path):
         - utr_number: UTR/Reference number (look for labels like "UTR:", "Ref No:", "Transaction ID:")
         - amount: Transaction amount (numerical value only)
         - date: Transaction date (YYYY-MM-DD format)
-
+        
         IMPORTANT INSTRUCTIONS:
         1. Focus specifically on finding the UTR number - it's typically 12 digits
         2. If UTR is not clearly visible, set confidence_score to low (< 0.5)
         3. Extract exact text as shown in the image
         4. Return ONLY valid, clearly visible data
         5. If a field is not visible, return empty string ""
-        6. Include the approximate time it took you to process this request in seconds
         
         Return this JSON structure:
         {
@@ -153,8 +158,7 @@ def extract_upi_data_from_file(image_path):
             "amount": "string",
             "date": "string",
             "confidence_score": 0.8,
-            "extraction_notes": "any important observations",
-            "processing_time_seconds": "estimated time taken to generate this response"
+            "extraction_notes": "any important observations"
         }
         """
         
@@ -164,7 +168,7 @@ def extract_upi_data_from_file(image_path):
             generation_config={
                 "max_output_tokens": 2048,
                 "temperature": 0.1,
-                "response_mime_type":"application/json",
+                "response_mime_type": "application/json",
             }
         )
         
@@ -216,13 +220,6 @@ def extract_upi_data_from_file(image_path):
                 # Convert numeric values to strings for consistency
                 extracted_data[key] = str(extracted_data[key])
         
-        # Log processing time reported by Gemini (if available)
-        if 'processing_time_seconds' in extracted_data:
-            gemini_processing_time = extracted_data.get('processing_time_seconds', 'N/A')
-            print(f"🕒 Gemini reported processing time: {gemini_processing_time} seconds")
-            # Remove from final response (as requested - not shown to client)
-            del extracted_data['processing_time_seconds']
-        
         print(f"DEBUG: Final processed data: {extracted_data}")
         return extracted_data
         
@@ -245,8 +242,11 @@ def extract_upi_data_from_file(image_path):
             "extraction_notes": f"Extraction error: {str(e)}"
         }
 
-def extract_upi_data_from_bank_statement(image_path, tenant_details):
-    """Extract UPI transaction data from landlord bank statement screenshot using tenant details for matching"""
+def extract_upi_data_from_bank_statement_direct(file_path, tenant_details):
+    """
+    ✨ NEW: Direct PDF/Image processing - handles both formats natively
+    Extract UPI transaction data from landlord bank statement (PDF or image) using tenant details for matching
+    """
     
     # Check if model is initialized
     if model is None:
@@ -260,34 +260,43 @@ def extract_upi_data_from_bank_statement(image_path, tenant_details):
         }
     
     try:
-        # Read and process the image file
-        with open(image_path, 'rb') as image_file:
-            image_bytes = image_file.read()
-            
-        # Create image part from bytes
-        image_part = Part.from_data(
-            data=image_bytes,
-            mime_type="image/jpeg"
-        )
+        # Determine file type and create appropriate Part
+        file_extension = os.path.splitext(file_path)[1].lower()
+        
+        with open(file_path, 'rb') as file:
+            file_bytes = file.read()
+        
+        if file_extension == '.pdf':
+            print("DEBUG: Processing PDF bank statement directly with Gemini")
+            # Create PDF part for direct processing
+            document_part = Part.from_data(
+                mime_type="application/pdf",
+                data=file_bytes
+            )
+        else:
+            print("DEBUG: Processing image bank statement")
+            # Create image part
+            document_part = Part.from_data(
+                mime_type="image/jpeg",
+                data=file_bytes
+            )
         
         # Get tenant transaction details for matching
         tenant_amount = tenant_details.get('amount', '')
         tenant_date = tenant_details.get('date', '')
         tenant_utr = tenant_details.get('utr_number', '')
         
-        # Enhanced prompt specifically for bank statement with multiple transactions
+        # Enhanced prompt specifically for bank statement (PDF or image) with multiple transactions
         prompt = f"""
-        You are analyzing a BANK STATEMENT screenshot that shows MULTIPLE transactions in a list/table format.
+        You are analyzing a BANK STATEMENT {'PDF document' if file_extension == '.pdf' else 'image'} that shows MULTIPLE transactions in a list/table format.
 
-        BANK STATEMENT FORMAT (as shown in image):
-        - Transactions are displayed in rows, one per line
+        BANK STATEMENT FORMAT:
+        - {'PDF document contains' if file_extension == '.pdf' else 'Image contains'} multiple transactions displayed in rows/list
         - Each transaction shows: Date, Description (with UPI details), Amount, Reference/UTR number
         - Amounts may have +/- indicators for credit/debit
-        - UTR numbers are typically 12-digit numbers (not necessarily 12-digit)
+        - UTR numbers are typically 10-16 digit numbers
         - Transaction descriptions contain detailed UPI payment information
-
-        EXAMPLE FORMAT FROM BANK STATEMENT:
-        Row format: [Date] [UPI Description with sender details] [Amount] [UTR/Ref No]
+        - {'Search through ALL pages of the PDF document' if file_extension == '.pdf' else 'Search through the entire image'}
 
         SPECIFIC TRANSACTION TO FIND:
         Find the transaction that matches these tenant payment details:
@@ -296,10 +305,10 @@ def extract_upi_data_from_bank_statement(image_path, tenant_details):
         - UTR/Reference number: {tenant_utr} (if provided)
 
         SEARCH STRATEGY:
-        1. Look through each transaction row in the bank statement
+        1. {'Scan through ALL pages and look through each' if file_extension == '.pdf' else 'Look through each'} transaction row
         2. Match the amount ({tenant_amount}) exactly (ignore +/- signs)
         3. Match the date ({tenant_date}) exactly
-        4. Match the UTR/Reference number ({tenant_utr}) exactly if provided 
+        4. Match the UTR/Reference number ({tenant_utr}) exactly if provided
         5. Extract the UTR/Reference number from that specific matching row
 
         IMPORTANT INSTRUCTIONS:
@@ -310,32 +319,31 @@ def extract_upi_data_from_bank_statement(image_path, tenant_details):
         - DO NOT extract from random transactions
         - If multiple transactions match, choose the one closest to the given date
         - If no matching transaction is found, return empty strings for all fields
-        - Include the approximate time it took you to process this request in seconds
+        - {'Specify which page the transaction was found on if applicable' if file_extension == '.pdf' else 'Confirm the transaction location in the image'}
 
         Return this JSON structure:
         {{
-            "utr_number": "12-digit UTR from the matching transaction",
+            "utr_number": "UTR from the matching transaction",
             "amount": "amount from the matching transaction",
             "date": "date from the matching transaction (YYYY-MM-DD)",
             "confidence_score": 0.8,
-            "extraction_notes": "Details about which transaction was matched and confidence level",
-            "processing_time_seconds": "estimated time taken to generate this response"
+            "extraction_notes": "Details about which transaction was matched{'and page number' if file_extension == '.pdf' else ''}"
         }}
         """
         
-        # Generate response
+        # Generate response using native PDF/image processing
         response = model.generate_content(
-            [image_part, prompt],
+            [document_part, prompt],
             generation_config={
                 "max_output_tokens": 2048,
                 "temperature": 0.1,
-                "response_mime_type":"application/json",
+                "response_mime_type": "application/json",
             }
         )
         
         # 🔍 LOG RAW RESPONSE - EXACTLY what Gemini returns
         print(f"\n" + "="*80)
-        print(f"🔍 RAW GEMINI RESPONSE (Bank statement):")
+        print(f"🔍 RAW GEMINI RESPONSE (Bank statement {'PDF' if file_extension == '.pdf' else 'image'}):")
         print(f"Response type: {type(response.text)}")
         print(f"Response length: {len(response.text)} characters")
         print(f"Raw response content:")
@@ -345,7 +353,7 @@ def extract_upi_data_from_bank_statement(image_path, tenant_details):
         print(f"="*80 + "\n")
         
         # Optimized JSON parsing using utility function
-        extracted_data, parse_method = parse_gemini_json_response(response.text, "Bank statement")
+        extracted_data, parse_method = parse_gemini_json_response(response.text, f"Bank statement ({'PDF' if file_extension == '.pdf' else 'image'})")
         
         if extracted_data is None:
             return {
@@ -380,13 +388,6 @@ def extract_upi_data_from_bank_statement(image_path, tenant_details):
             elif isinstance(extracted_data[key], (int, float)) and key != "confidence_score":
                 # Convert numeric values to strings for consistency
                 extracted_data[key] = str(extracted_data[key])
-        
-        # Log processing time reported by Gemini (if available)
-        if 'processing_time_seconds' in extracted_data:
-            gemini_processing_time = extracted_data.get('processing_time_seconds', 'N/A')
-            print(f"🕒 Gemini reported processing time (Bank statement): {gemini_processing_time} seconds")
-            # Remove from final response (as requested - not shown to client)
-            del extracted_data['processing_time_seconds']
         
         print(f"DEBUG: Final bank statement processed data: {extracted_data}")
         return extracted_data
@@ -461,7 +462,7 @@ def index():
 
 @app.route('/upload', methods=['POST'])
 def upload_files():
-    """Handle file upload and processing using temporary file storage"""
+    """Handle file upload and processing with direct PDF support"""
     
     print("DEBUG: Upload route called")
     print(f"DEBUG: Files in request: {list(request.files.keys())}")
@@ -484,9 +485,15 @@ def upload_files():
         flash('Please select both files!')
         return redirect(url_for('index'))
     
-    if not (allowed_file(tenant_file.filename) and allowed_file(landlord_file.filename)):
-        print(f"DEBUG: Invalid file types. Tenant: {allowed_file(tenant_file.filename)}, Landlord: {allowed_file(landlord_file.filename)}")
-        flash('Invalid file format! Please upload PNG, JPG, JPEG, WEBP, or HEIC files.')
+    # Updated validation - tenant must be image, landlord can be image or PDF
+    if not allowed_file(tenant_file.filename):
+        print(f"DEBUG: Invalid tenant file type")
+        flash('Tenant screenshot must be PNG, JPG, JPEG, WEBP, or HEIC!')
+        return redirect(url_for('index'))
+        
+    if not allowed_statement_file(landlord_file.filename):
+        print(f"DEBUG: Invalid landlord file type")
+        flash('Bank statement must be PNG, JPG, JPEG, WEBP, HEIC, or PDF!')
         return redirect(url_for('index'))
     
     # Check if Gemini API is initialized
@@ -505,14 +512,18 @@ def upload_files():
             tenant_file.save(temp_tenant.name)
             tenant_temp_path = temp_tenant.name
             
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_landlord:
+        # Handle different file types for landlord
+        landlord_extension = os.path.splitext(landlord_file.filename)[1].lower()
+        suffix = '.pdf' if landlord_extension == '.pdf' else '.jpg'
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_landlord:
             landlord_file.save(temp_landlord.name)
             landlord_temp_path = temp_landlord.name
             
         print(f"DEBUG: Saved temp files: {tenant_temp_path}, {landlord_temp_path}")
         
         try:
-            # STEP 1: Process tenant UPI screenshot first
+            # STEP 1: Process tenant UPI screenshot first (same as before)
             print("DEBUG: Processing tenant UPI screenshot...")
             tenant_data = extract_upi_data_from_file(tenant_temp_path)
             print(f"DEBUG: Tenant data extracted: {tenant_data}")
@@ -524,9 +535,9 @@ def upload_files():
                 flash(error_msg)
                 return redirect(url_for('index'))
             
-            # STEP 2: Process landlord bank statement using tenant details
-            print("DEBUG: Processing landlord bank statement with tenant details...")
-            landlord_data = extract_upi_data_from_bank_statement(landlord_temp_path, tenant_data)
+            # STEP 2: Process landlord bank statement (PDF or image) using direct processing
+            print("DEBUG: Processing landlord bank statement directly...")
+            landlord_data = extract_upi_data_from_bank_statement_direct(landlord_temp_path, tenant_data)
             print(f"DEBUG: Landlord data extracted: {landlord_data}")
             
             # Check for landlord extraction errors
@@ -569,7 +580,7 @@ def upload_files():
 
 @app.route('/api/verify', methods=['POST'])
 def api_verify():
-    """API endpoint for programmatic access using temporary file storage"""
+    """API endpoint for programmatic access with PDF support"""
     
     if 'tenant_screenshot' not in request.files or 'landlord_screenshot' not in request.files:
         return jsonify({'error': 'Both files required'}), 400
@@ -582,16 +593,22 @@ def api_verify():
         tenant_file = request.files['tenant_screenshot']
         landlord_file = request.files['landlord_screenshot']
         
-        # Validate file types
-        if not (allowed_file(tenant_file.filename) and allowed_file(landlord_file.filename)):
-            return jsonify({'error': 'Invalid file format. Supported: PNG, JPG, JPEG, WEBP, HEIC'}), 400
+        # Updated validation for API
+        if not allowed_file(tenant_file.filename):
+            return jsonify({'error': 'Tenant file must be image format (PNG, JPG, JPEG, WEBP, HEIC)'}), 400
         
-        # Save uploaded files to temporary files
+        if not allowed_statement_file(landlord_file.filename):
+            return jsonify({'error': 'Bank statement must be image or PDF format'}), 400
+        
+        # Process files (same logic as web route)
         with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_tenant:
             tenant_file.save(temp_tenant.name)
             tenant_temp_path = temp_tenant.name
             
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_landlord:
+        landlord_extension = os.path.splitext(landlord_file.filename)[1].lower()
+        suffix = '.pdf' if landlord_extension == '.pdf' else '.jpg'
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_landlord:
             landlord_file.save(temp_landlord.name)
             landlord_temp_path = temp_landlord.name
         
@@ -606,8 +623,8 @@ def api_verify():
                     'tenant_error': tenant_data.get('error')
                 }), 422
             
-            # STEP 2: Process landlord bank statement using tenant details
-            landlord_data = extract_upi_data_from_bank_statement(landlord_temp_path, tenant_data)
+            # STEP 2: Process landlord bank statement using direct processing
+            landlord_data = extract_upi_data_from_bank_statement_direct(landlord_temp_path, tenant_data)
             
             # Check for landlord extraction errors
             if 'error' in landlord_data:
@@ -633,15 +650,15 @@ def api_verify():
 
 @app.route('/health')
 def health_check():
-    """Health check endpoint with parsing performance stats"""
+    """Health check endpoint with PDF support info"""
     total_requests = sum(parsing_stats.values())
-    
     status = {
         'status': 'healthy',
         'gemini_api': 'connected' if model is not None else 'disconnected',
         'project_id': PROJECT_ID or 'not_set',
         'location': LOCATION,
         'response_mime_type': 'enabled',
+        'pdf_support': 'native_processing',  # Updated to reflect native processing
         'parsing_performance': {
             'total_requests': total_requests,
             'direct_json_success_rate': f"{(parsing_stats['direct'] / max(total_requests, 1)) * 100:.1f}%",
@@ -666,6 +683,7 @@ if __name__ == '__main__':
     print(f"📍 Project ID: {PROJECT_ID}")
     print(f"📍 Location: {LOCATION}")
     print(f"🔧 Max file size: {MAX_FILE_SIZE // (1024*1024)}MB")
+    print(f"📄 PDF support: ✅ Native processing (no conversion needed)")
     print(f"🎯 Gemini API: {'✅ Connected' if model else '❌ Not connected'}")
     
     app.run(debug=True, host='0.0.0.0', port=5001)

@@ -51,14 +51,14 @@
                             <!-- Landlord Screenshot Upload -->
                             <div class="mb-4">
                                 <label for="landlord_screenshot" class="form-label">
-                                    <strong>🏦 Landlord's Bank Statement Screenshot</strong>
+                                    <strong>🏦 Landlord's Bank Statement</strong>
                                 </label>
                                 <div class="upload-area" id="landlord-drop-area">
                                     <input type="file" class="form-control" id="landlord_screenshot" 
-                                           name="landlord_screenshot" accept="image/*" required>
+                                           name="landlord_screenshot" accept="image/*,.pdf" required>
                                     <div class="upload-text">
-                                        <p>Click to select or drag & drop bank statement screenshot</p>
-                                        <small class="text-muted">Supported: PNG, JPG, JPEG, WEBP, HEIC (Max 16MB)</small>
+                                        <p>Click to select or drag & drop bank statement</p>
+                                        <small class="text-muted">Supported: PNG, JPG, JPEG, WEBP, HEIC, PDF (Max 16MB)</small>
                                     </div>
                                 </div>
                                 <div id="landlord-preview" class="mt-2"></div>
@@ -82,9 +82,9 @@
                             <h6>📋 Instructions:</h6>
                             <ul class="mb-0 small">
                                 <li><strong>Tenant:</strong> Upload screenshot from UPI app (PhonePe, Google Pay, etc.)</li>
-                                <li><strong>Landlord:</strong> Upload bank statement showing the received payment</li>
-                                <li>Ensure UTR numbers are clearly visible in both screenshots</li>
-                                <li>Supported formats: PNG, JPG, JPEG, WEBP, HEIC</li>
+                                <li><strong>Landlord:</strong> Upload bank statement (screenshot or PDF)</li>
+                                <li>Ensure UTR numbers are clearly visible in both files</li>
+                                <li><strong>Supported formats:</strong> PNG, JPG, JPEG, WEBP, HEIC, PDF</li>
                             </ul>
                         </div>
                         
@@ -134,6 +134,15 @@
                     img.className = 'img-thumbnail mt-2';
                     img.style.maxHeight = '200px';
                     preview.appendChild(img);
+                } else if (file.type === 'application/pdf') {
+                    const pdfInfo = document.createElement('div');
+                    pdfInfo.className = 'alert alert-info mt-2';
+                    pdfInfo.innerHTML = `
+                        <i class="fas fa-file-pdf"></i> 
+                        <strong>PDF Selected:</strong> ${file.name} 
+                        <small>(${(file.size / 1024 / 1024).toFixed(2)} MB)</small>
+                    `;
+                    preview.appendChild(pdfInfo);
                 }
             }
         }

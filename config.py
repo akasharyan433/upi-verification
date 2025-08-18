@@ -21,7 +21,8 @@ class Config:
         print("Please create a .env file with your Google Cloud Project ID")
     
     # File Validation (Still needed)
-    ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp', 'heic'}
+    ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp', 'heic'}  # Images only for tenant
+    ALLOWED_STATEMENT_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp', 'heic', 'pdf'}  # Images + PDF for bank statement
     
     # Buffer Processing Configuration (New settings)
     MAX_IMAGE_DIMENSION = 1024  # Max width/height for image optimization

@@ -145,6 +145,7 @@ def extract_upi_data_from_file(image_path):
         3. Extract exact text as shown in the image
         4. Return ONLY valid, clearly visible data
         5. If a field is not visible, return empty string ""
+        6. Include the approximate time it took you to process this request in seconds
         
         Return this JSON structure:
         {
@@ -152,7 +153,8 @@ def extract_upi_data_from_file(image_path):
             "amount": "string",
             "date": "string",
             "confidence_score": 0.8,
-            "extraction_notes": "any important observations"
+            "extraction_notes": "any important observations",
+            "processing_time_seconds": "estimated time taken to generate this response"
         }
         """
         
@@ -213,6 +215,13 @@ def extract_upi_data_from_file(image_path):
             elif isinstance(extracted_data[key], (int, float)) and key != "confidence_score":
                 # Convert numeric values to strings for consistency
                 extracted_data[key] = str(extracted_data[key])
+        
+        # Log processing time reported by Gemini (if available)
+        if 'processing_time_seconds' in extracted_data:
+            gemini_processing_time = extracted_data.get('processing_time_seconds', 'N/A')
+            print(f"🕒 Gemini reported processing time: {gemini_processing_time} seconds")
+            # Remove from final response (as requested - not shown to client)
+            del extracted_data['processing_time_seconds']
         
         print(f"DEBUG: Final processed data: {extracted_data}")
         return extracted_data
@@ -301,6 +310,7 @@ def extract_upi_data_from_bank_statement(image_path, tenant_details):
         - DO NOT extract from random transactions
         - If multiple transactions match, choose the one closest to the given date
         - If no matching transaction is found, return empty strings for all fields
+        - Include the approximate time it took you to process this request in seconds
 
         Return this JSON structure:
         {{
@@ -308,7 +318,8 @@ def extract_upi_data_from_bank_statement(image_path, tenant_details):
             "amount": "amount from the matching transaction",
             "date": "date from the matching transaction (YYYY-MM-DD)",
             "confidence_score": 0.8,
-            "extraction_notes": "Details about which transaction was matched and confidence level"
+            "extraction_notes": "Details about which transaction was matched and confidence level",
+            "processing_time_seconds": "estimated time taken to generate this response"
         }}
         """
         
@@ -369,6 +380,13 @@ def extract_upi_data_from_bank_statement(image_path, tenant_details):
             elif isinstance(extracted_data[key], (int, float)) and key != "confidence_score":
                 # Convert numeric values to strings for consistency
                 extracted_data[key] = str(extracted_data[key])
+        
+        # Log processing time reported by Gemini (if available)
+        if 'processing_time_seconds' in extracted_data:
+            gemini_processing_time = extracted_data.get('processing_time_seconds', 'N/A')
+            print(f"🕒 Gemini reported processing time (Bank statement): {gemini_processing_time} seconds")
+            # Remove from final response (as requested - not shown to client)
+            del extracted_data['processing_time_seconds']
         
         print(f"DEBUG: Final bank statement processed data: {extracted_data}")
         return extracted_data

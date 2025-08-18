@@ -21,6 +21,14 @@ MAX_FILE_SIZE = app.config['MAX_CONTENT_LENGTH']
 PROJECT_ID = app.config['GCP_PROJECT_ID']
 LOCATION = app.config['GCP_LOCATION']
 
+# Performance tracking for JSON parsing strategies
+parsing_stats = {
+    "direct": 0,
+    "markdown": 0, 
+    "bracket": 0,
+    "failed": 0
+}
+
 # Initialize Vertex AI with error handling
 model = None
 try:
@@ -28,7 +36,7 @@ try:
         raise ValueError("GCP_PROJECT_ID not found in environment variables")
     
     vertexai.init(project=PROJECT_ID, location=LOCATION)
-    model = GenerativeModel("gemini-2.5-pro")
+    model = GenerativeModel("gemini-2.5-flash-lite")
     print(f"✅ Successfully connected to Vertex AI - Project: {PROJECT_ID}, Location: {LOCATION}")
 except Exception as e:
     print(f"❌ Failed to initialize Vertex AI: {str(e)}")
@@ -42,6 +50,60 @@ def allowed_file(filename):
     """Check if uploaded file has allowed extension"""
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def parse_gemini_json_response(response_text, context="UPI extraction"):
+    """
+    Parse Gemini JSON response with multiple strategies
+    Optimized for response_mime_type="application/json" but with fallbacks
+    """
+    response_text = response_text.strip()
+    
+    print(f"DEBUG: {context} - Raw response length: {len(response_text)}")
+    print(f"DEBUG: {context} - Raw response: {response_text}")
+    
+    # Strategy 1: Direct JSON parsing (should work with response_mime_type)
+    try:
+        extracted_data = json.loads(response_text)
+        print(f"DEBUG: ✅ {context} - Strategy 1 (Direct JSON) succeeded")
+        parsing_stats["direct"] += 1
+        return extracted_data, "direct"
+    except json.JSONDecodeError as e:
+        print(f"DEBUG: ⚠️ {context} - Strategy 1 failed: {e}")
+    
+    # Strategy 2: Markdown code block extraction
+    json_pattern = r'```(?:json)?\s*(.*?)\s*```'
+    match = re.search(json_pattern, response_text, re.DOTALL)
+    if match:
+        try:
+            json_text = match.group(1).strip()
+            extracted_data = json.loads(json_text)
+            print(f"DEBUG: ✅ {context} - Strategy 2 (Markdown) succeeded")
+            parsing_stats["markdown"] += 1
+            return extracted_data, "markdown"
+        except json.JSONDecodeError:
+            print(f"DEBUG: ⚠️ {context} - Strategy 2 found pattern but parsing failed")
+    else:
+        print(f"DEBUG: ⚠️ {context} - Strategy 2 no code block found")
+    
+    # Strategy 3: Bracket-based extraction
+    try:
+        start_idx = response_text.find('{')
+        end_idx = response_text.rfind('}')
+        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+            json_text = response_text[start_idx:end_idx+1]
+            extracted_data = json.loads(json_text)
+            print(f"DEBUG: ✅ {context} - Strategy 3 (Bracket extraction) succeeded")
+            parsing_stats["bracket"] += 1
+            return extracted_data, "bracket"
+        else:
+            print(f"DEBUG: ⚠️ {context} - Strategy 3 no valid brackets found")
+    except json.JSONDecodeError as e:
+        print(f"DEBUG: ⚠️ {context} - Strategy 3 failed: {e}")
+    
+    # All strategies failed
+    print(f"DEBUG: ❌ {context} - All parsing strategies failed")
+    parsing_stats["failed"] += 1
+    return None, "failed"
 
 def extract_upi_data_from_file(image_path):
     """Extract UPI transaction data using Gemini from tenant UPI screenshot (single transaction)"""
@@ -68,7 +130,7 @@ def extract_upi_data_from_file(image_path):
             mime_type="image/jpeg"
         )
         
-        # Enhanced prompt for UPI data extraction
+        # Enhanced prompt for UPI data extraction (optimized for JSON response)
         prompt = """
         Analyze this UPI transaction screenshot and extract the following information.
         
@@ -83,9 +145,8 @@ def extract_upi_data_from_file(image_path):
         3. Extract exact text as shown in the image
         4. Return ONLY valid, clearly visible data
         5. If a field is not visible, return empty string ""
-        6. MUST return valid JSON format - no additional text or explanations
         
-        Return ONLY this JSON structure with no additional text:
+        Return this JSON structure:
         {
             "utr_number": "string",
             "amount": "string",
@@ -101,65 +162,32 @@ def extract_upi_data_from_file(image_path):
             generation_config={
                 "max_output_tokens": 2048,
                 "temperature": 0.1,
+                "response_mime_type":"application/json",
             }
         )
         
-        # Robust JSON parsing with multiple fallback strategies
-        extracted_data = None
-        response_text = response.text.strip()
+        # 🔍 LOG RAW RESPONSE - EXACTLY what Gemini returns
+        print(f"\n" + "="*80)
+        print(f"🔍 RAW GEMINI RESPONSE (UPI extraction):")
+        print(f"Response type: {type(response.text)}")
+        print(f"Response length: {len(response.text)} characters")
+        print(f"Raw response content:")
+        print(f"'{response.text}'")
+        print(f"Raw response repr:")
+        print(repr(response.text))
+        print(f"="*80 + "\n")
         
-        print(f"DEBUG: Raw Gemini response length: {len(response_text)}")
-        print(f"DEBUG: Raw Gemini response: {response_text}")
-        print(f"DEBUG: First 200 chars: {response_text[:200]}")
+        # Optimized JSON parsing using utility function
+        extracted_data, parse_method = parse_gemini_json_response(response.text, "UPI extraction")
         
-        # Strategy 1: Direct JSON parsing
-        try:
-            extracted_data = json.loads(response_text)
-            print("DEBUG: Successfully parsed with Strategy 1 (Direct JSON)")
-        except json.JSONDecodeError:
-            print("DEBUG: Strategy 1 (Direct JSON) failed")
-        
-        # Strategy 2: Extract JSON from markdown code blocks
         if extracted_data is None:
-            # Look for JSON wrapped in ```json ... ``` or ``` ... ```
-            json_pattern = r'```(?:json)?\s*(.*?)\s*```'
-            match = re.search(json_pattern, response_text, re.DOTALL)
-            if match:
-                try:
-                    json_text = match.group(1).strip()
-                    extracted_data = json.loads(json_text)
-                    print("DEBUG: Successfully parsed with Strategy 2 (Markdown)")
-                except json.JSONDecodeError:
-                    print("DEBUG: Strategy 2 (Markdown) found pattern but JSON parsing failed")
-            else:
-                print("DEBUG: Strategy 2 (Markdown) - no code block found")
-        
-        # Strategy 3: Look for JSON-like content between { and }
-        if extracted_data is None:
-            try:
-                # Find the first { and last } to extract JSON
-                start_idx = response_text.find('{')
-                end_idx = response_text.rfind('}')
-                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-                    json_text = response_text[start_idx:end_idx+1]
-                    print(f"DEBUG: Attempting to parse extracted JSON: {json_text[:100]}...")
-                    extracted_data = json.loads(json_text)
-                    print("DEBUG: Successfully parsed with Strategy 3 (Bracket extraction)")
-                else:
-                    print("DEBUG: Strategy 3 (Bracket extraction) - no valid brackets found")
-            except json.JSONDecodeError as e:
-                print(f"DEBUG: Strategy 3 (Bracket extraction) JSON parsing failed: {e}")
-        
-        # If all parsing strategies failed, return error
-        if extracted_data is None:
-            print("DEBUG: All JSON parsing strategies failed")
             return {
-                "error": f"Failed to parse API response as JSON. Raw response: {response_text[:200]}...",
+                "error": f"Failed to parse Gemini response. Method tried: {parse_method}. Raw response: {response.text[:200]}...",
                 "confidence_score": 0.0,
                 "utr_number": "",
                 "amount": "",
                 "date": "",
-                "extraction_notes": "JSON parsing failed - invalid format"
+                "extraction_notes": f"JSON parsing failed using response_mime_type - {parse_method}"
             }
         
         # Ensure all required fields exist with default values
@@ -273,9 +301,8 @@ def extract_upi_data_from_bank_statement(image_path, tenant_details):
         - DO NOT extract from random transactions
         - If multiple transactions match, choose the one closest to the given date
         - If no matching transaction is found, return empty strings for all fields
-        - MUST return valid JSON format - no additional text or explanations
 
-        Return ONLY this JSON structure with no additional text:
+        Return this JSON structure:
         {{
             "utr_number": "12-digit UTR from the matching transaction",
             "amount": "amount from the matching transaction",
@@ -290,60 +317,28 @@ def extract_upi_data_from_bank_statement(image_path, tenant_details):
             [image_part, prompt],
             generation_config={
                 "max_output_tokens": 2048,
-                "temperature": 0.1
+                "temperature": 0.1,
+                "response_mime_type":"application/json",
             }
         )
         
-        # Apply the same robust JSON parsing logic as the main extraction function
-        extracted_data = None
-        response_text = response.text.strip()
+        # 🔍 LOG RAW RESPONSE - EXACTLY what Gemini returns
+        print(f"\n" + "="*80)
+        print(f"🔍 RAW GEMINI RESPONSE (Bank statement):")
+        print(f"Response type: {type(response.text)}")
+        print(f"Response length: {len(response.text)} characters")
+        print(f"Raw response content:")
+        print(f"'{response.text}'")
+        print(f"Raw response repr:")
+        print(repr(response.text))
+        print(f"="*80 + "\n")
         
-        print(f"DEBUG: Bank statement response length: {len(response_text)}")
-        print(f"DEBUG: Bank statement first 200 chars: {response_text[:200]}")
+        # Optimized JSON parsing using utility function
+        extracted_data, parse_method = parse_gemini_json_response(response.text, "Bank statement")
         
-        # Strategy 1: Direct JSON parsing
-        try:
-            extracted_data = json.loads(response_text)
-            print("DEBUG: Bank statement parsed with Strategy 1 (Direct JSON)")
-        except json.JSONDecodeError:
-            print("DEBUG: Bank statement Strategy 1 (Direct JSON) failed")
-        
-        # Strategy 2: Extract JSON from markdown code blocks
         if extracted_data is None:
-            # Look for JSON wrapped in ```json ... ``` or ``` ... ```
-            json_pattern = r'```(?:json)?\s*(.*?)\s*```'
-            match = re.search(json_pattern, response_text, re.DOTALL)
-            if match:
-                try:
-                    json_text = match.group(1).strip()
-                    extracted_data = json.loads(json_text)
-                    print("DEBUG: Bank statement parsed with Strategy 2 (Markdown)")
-                except json.JSONDecodeError:
-                    print("DEBUG: Bank statement Strategy 2 (Markdown) found pattern but JSON parsing failed")
-            else:
-                print("DEBUG: Bank statement Strategy 2 (Markdown) - no code block found")
-        
-        # Strategy 3: Look for JSON-like content between { and }
-        if extracted_data is None:
-            try:
-                # Find the first { and last } to extract JSON
-                start_idx = response_text.find('{')
-                end_idx = response_text.rfind('}')
-                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-                    json_text = response_text[start_idx:end_idx+1]
-                    print(f"DEBUG: Bank statement attempting to parse extracted JSON: {json_text[:100]}...")
-                    extracted_data = json.loads(json_text)
-                    print("DEBUG: Bank statement parsed with Strategy 3 (Bracket extraction)")
-                else:
-                    print("DEBUG: Bank statement Strategy 3 (Bracket extraction) - no valid brackets found")
-            except json.JSONDecodeError as e:
-                print(f"DEBUG: Bank statement Strategy 3 (Bracket extraction) JSON parsing failed: {e}")
-        
-        # If all parsing strategies failed, return error
-        if extracted_data is None:
-            print("DEBUG: All bank statement JSON parsing strategies failed")
             return {
-                "error": f"Failed to parse bank statement response. Raw response: {response_text[:200]}...",
+                "error": f"Failed to parse bank statement response. Method: {parse_method}. Raw response: {response.text[:200]}...",
                 "confidence_score": 0.0,
                 "utr_number": "",
                 "amount": "",
@@ -403,8 +398,8 @@ def verify_utr_match(tenant_data, landlord_data):
     print("DEBUG: Tenant data:", tenant_data)
     print("DEBUG: Landlord data:", landlord_data)
 
-    tenant_utr = tenant_data.get('utr_number', '').strip()
-    landlord_utr = landlord_data.get('utr_number', '').strip()
+    tenant_utr = (tenant_data.get('utr_number') or '').strip()
+    landlord_utr = (landlord_data.get('utr_number') or '').strip()
     
     # Basic UTR validation
     def is_valid_utr(utr):
@@ -620,12 +615,24 @@ def api_verify():
 
 @app.route('/health')
 def health_check():
-    """Health check endpoint"""
+    """Health check endpoint with parsing performance stats"""
+    total_requests = sum(parsing_stats.values())
+    
     status = {
         'status': 'healthy',
         'gemini_api': 'connected' if model is not None else 'disconnected',
         'project_id': PROJECT_ID or 'not_set',
-        'location': LOCATION
+        'location': LOCATION,
+        'response_mime_type': 'enabled',
+        'parsing_performance': {
+            'total_requests': total_requests,
+            'direct_json_success_rate': f"{(parsing_stats['direct'] / max(total_requests, 1)) * 100:.1f}%",
+            'fallback_usage': {
+                'markdown': parsing_stats['markdown'],
+                'bracket': parsing_stats['bracket'],
+                'failed': parsing_stats['failed']
+            }
+        }
     }
     return jsonify(status)
 

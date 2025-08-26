@@ -920,6 +920,11 @@ def index():
     """Main upload page"""
     return render_template('index.html')
 
+@app.route('/multi-tenant')
+def multi_tenant_page():
+    """Multi-tenant upload page"""
+    return render_template('multi_tenant.html')
+
 @app.route('/upload', methods=['POST'])
 def upload_files():
     """Handle file upload and processing with direct PDF support"""

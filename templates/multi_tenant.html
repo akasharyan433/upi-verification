@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-Tenant UPI Verifier</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .json-editor {
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            border: 2px solid #dee2e6;
+            border-radius: 0.375rem;
+            background-color: #f8f9fa;
+        }
+        .json-editor:focus {
+            border-color: #0d6efd;
+            box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+        }
+        .tenant-card {
+            border-left: 4px solid #0d6efd;
+        }
+        .sample-json {
+            background-color: #f8f9fa;
+            border-left: 4px solid #28a745;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 0.9em;
+        }
+        .navigation-tabs {
+            border-bottom: 2px solid #dee2e6;
+        }
+        .nav-link.active {
+            background-color: #0d6efd !important;
+            color: white !important;
+        }
+        .result-card {
+            transition: all 0.3s ease;
+        }
+        .verified { border-left: 4px solid #28a745; }
+        .partial { border-left: 4px solid #ffc107; }
+        .no-match { border-left: 4px solid #dc3545; }
+        .error { border-left: 4px solid #6c757d; }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+        <!-- Navigation -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <nav class="navigation-tabs">
+                    <div class="nav nav-tabs" id="nav-tab" role="tablist">
+                        <a class="nav-link" href="{{ url_for('index') }}">
+                            <i class="fas fa-user"></i> Single Tenant
+                        </a>
+                        <a class="nav-link active" href="{{ url_for('multi_tenant_page') }}">
+                            <i class="fas fa-users"></i> Multi-Tenant
+                        </a>
+                    </div>
+                </nav>
+            </div>
+        </div>
+
+        <div class="row justify-content-center">
+            <div class="col-lg-10">
+                <div class="card shadow">
+                    <div class="card-header bg-success text-white">
+                        <h2 class="mb-0"><i class="fas fa-users"></i> Multi-Tenant UPI Verifier</h2>
+                        <p class="mb-0">Verify multiple rental payments simultaneously</p>
+                    </div>
+                    <div class="card-body">
+                        
+                        <!-- Flash Messages -->
+                        {% with messages = get_flashed_messages() %}
+                            {% if messages %}
+                                {% for message in messages %}
+                                    <div class="alert alert-info alert-dismissible fade show" role="alert">
+                                        {{ message }}
+                                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                                    </div>
+                                {% endfor %}
+                            {% endif %}
+                        {% endwith %}
+                        
+                        <form id="multiTenantForm" enctype="multipart/form-data">
+                            
+                            <!-- Tenant Data JSON Input -->
+                            <div class="mb-4">
+                                <label for="tenant_data" class="form-label">
+                                    <strong><i class="fas fa-code"></i> Tenant Transaction Data (JSON Array)</strong>
+                                </label>
+                                
+                                <!-- JSON Input Methods -->
+                                <div class="btn-group mb-3" role="group">
+                                    <button type="button" class="btn btn-outline-primary" id="manualJsonBtn">
+                                        <i class="fas fa-edit"></i> Manual Entry
+                                    </button>
+                                    <button type="button" class="btn btn-outline-primary" id="templateBtn">
+                                        <i class="fas fa-magic"></i> Use Template
+                                    </button>
+                                    <button type="button" class="btn btn-outline-primary" id="fileJsonBtn">
+                                        <i class="fas fa-file-upload"></i> Upload JSON File
+                                    </button>
+                                </div>
+                                
+                                <!-- File Upload for JSON (hidden) -->
+                                <input type="file" id="jsonFileInput" accept=".json" style="display: none;">
+                                
+                                <!-- JSON Text Area -->
+                                <textarea class="form-control json-editor" id="tenant_data" name="tenant_data" 
+                                          rows="12" placeholder="Enter JSON array of tenant transaction data..." required></textarea>
+                                
+                                <!-- JSON Validation Status -->
+                                <div id="jsonValidation" class="mt-2"></div>
+                                
+                                <!-- Tenant Count Display -->
+                                <div id="tenantCount" class="mt-2"></div>
+                            </div>
+                            
+                            <!-- Bank Statement Upload -->
+                            <div class="mb-4">
+                                <label for="landlord_statement" class="form-label">
+                                    <strong><i class="fas fa-university"></i> Landlord's Bank Statement</strong>
+                                </label>
+                                <div class="upload-area" id="landlord-drop-area">
+                                    <input type="file" class="form-control" id="landlord_statement" 
+                                           name="landlord_statement" accept="image/*,.pdf" required>
+                                    <div class="upload-text">
+                                        <p><i class="fas fa-cloud-upload-alt fa-2x mb-3"></i></p>
+                                        <p>Click to select or drag & drop bank statement</p>
+                                        <small class="text-muted">Supported: PNG, JPG, JPEG, WEBP, HEIC, PDF (Max 16MB)</small>
+                                    </div>
+                                </div>
+                                <div id="landlord-preview" class="mt-2"></div>
+                            </div>
+                            
+                            <!-- Submit Button -->
+                            <div class="d-grid">
+                                <button type="submit" class="btn btn-success btn-lg" id="submitBtn">
+                                    <span id="submitText">
+                                        <i class="fas fa-search"></i> Verify All Transactions
+                                    </span>
+                                    <span id="loadingText" style="display: none;">
+                                        <span class="spinner-border spinner-border-sm me-2"></span>
+                                        Processing Multiple Tenants...
+                                    </span>
+                                </button>
+                            </div>
+                            
+                        </form>
+                        
+                        <!-- Results Section -->
+                        <div id="resultsSection" class="mt-5" style="display: none;">
+                            <h4><i class="fas fa-chart-line"></i> Verification Results</h4>
+                            <div id="resultsSummary" class="mb-4"></div>
+                            <div id="resultsDetails"></div>
+                        </div>
+                        
+                        <!-- Sample JSON Template -->
+                        <div class="mt-4">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h6 class="mb-0">
+                                        <i class="fas fa-info-circle"></i> Sample Tenant Data Format
+                                        <button class="btn btn-sm btn-outline-primary float-end" id="copyTemplateBtn">
+                                            <i class="fas fa-copy"></i> Copy Template
+                                        </button>
+                                    </h6>
+                                </div>
+                                <div class="card-body">
+                                    <pre class="sample-json p-3 mb-0" id="sampleJson">[
+  {
+    "utr_number": "240115123456",
+    "amount": "15000",
+    "date": "2024-01-15",
+    "confidence_score": 0.9,
+    "extraction_notes": "From tenant A's PhonePe screenshot"
+  },
+  {
+    "utr_number": "240116789012",
+    "amount": "12000",
+    "date": "2024-01-16",
+    "confidence_score": 0.85,
+    "extraction_notes": "From tenant B's Google Pay receipt"
+  },
+  {
+    "utr_number": "240117345678",
+    "amount": "18000",
+    "date": "2024-01-17",
+    "confidence_score": 0.8,
+    "extraction_notes": "From tenant C's Paytm transaction"
+  }
+]</pre>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Instructions -->
+                        <div class="mt-4 p-3 bg-light rounded">
+                            <h6><i class="fas fa-list-ul"></i> Instructions:</h6>
+                            <ul class="mb-0 small">
+                                <li><strong>Tenant Data:</strong> Provide JSON array with UTR, amount, date for each tenant</li>
+                                <li><strong>Bank Statement:</strong> Upload landlord's bank statement (image or PDF)</li>
+                                <li><strong>Processing:</strong> System will find matches for all tenants simultaneously</li>
+                                <li><strong>Results:</strong> Each tenant gets VERIFIED, PARTIAL, NO_MATCH, or ERROR status</li>
+                                <li><strong>Required fields:</strong> utr_number, amount, date (confidence_score optional)</li>
+                            </ul>
+                        </div>
+                        
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Global variables
+        let currentTenantData = [];
+        
+        // Initialize page
+        document.addEventListener('DOMContentLoaded', function() {
+            setupFileUpload();
+            setupJsonHandling();
+            setupFormSubmission();
+            
+            // Load template by default
+            loadTemplate();
+        });
+        
+        // File upload handling
+        function setupFileUpload() {
+            const input = document.getElementById('landlord_statement');
+            const preview = document.getElementById('landlord-preview');
+            const dropArea = document.getElementById('landlord-drop-area');
+            
+            input.addEventListener('change', function(e) {
+                handleFiles(e.target.files, preview);
+            });
+            
+            // Drag and drop functionality
+            dropArea.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropArea.classList.add('drag-over');
+            });
+            
+            dropArea.addEventListener('dragleave', () => {
+                dropArea.classList.remove('drag-over');
+            });
+            
+            dropArea.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropArea.classList.remove('drag-over');
+                input.files = e.dataTransfer.files;
+                handleFiles(e.dataTransfer.files, preview);
+            });
+        }
+        
+        function handleFiles(files, preview) {
+            preview.innerHTML = '';
+            if (files.length > 0) {
+                const file = files[0];
+                if (file.type.startsWith('image/')) {
+                    const img = document.createElement('img');
+                    img.src = URL.createObjectURL(file);
+                    img.className = 'img-thumbnail mt-2';
+                    img.style.maxHeight = '200px';
+                    preview.appendChild(img);
+                } else if (file.type === 'application/pdf') {
+                    const pdfInfo = document.createElement('div');
+                    pdfInfo.className = 'alert alert-info mt-2';
+                    pdfInfo.innerHTML = `
+                        <i class="fas fa-file-pdf"></i> 
+                        <strong>PDF Selected:</strong> ${file.name} 
+                        <small>(${(file.size / 1024 / 1024).toFixed(2)} MB)</small>
+                    `;
+                    preview.appendChild(pdfInfo);
+                }
+            }
+        }
+        
+        // JSON handling
+        function setupJsonHandling() {
+            const tenantDataTextarea = document.getElementById('tenant_data');
+            const jsonFileInput = document.getElementById('jsonFileInput');
+            
+            // Real-time JSON validation
+            tenantDataTextarea.addEventListener('input', validateJson);
+            
+            // Button handlers
+            document.getElementById('manualJsonBtn').addEventListener('click', () => {
+                tenantDataTextarea.value = '';
+                tenantDataTextarea.focus();
+            });
+            
+            document.getElementById('templateBtn').addEventListener('click', loadTemplate);
+            
+            document.getElementById('fileJsonBtn').addEventListener('click', () => {
+                jsonFileInput.click();
+            });
+            
+            document.getElementById('copyTemplateBtn').addEventListener('click', () => {
+                const template = document.getElementById('sampleJson').textContent;
+                navigator.clipboard.writeText(template).then(() => {
+                    showToast('Template copied to clipboard!', 'success');
+                });
+            });
+            
+            // JSON file upload
+            jsonFileInput.addEventListener('change', function(e) {
+                const file = e.target.files[0];
+                if (file && file.type === 'application/json') {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        tenantDataTextarea.value = e.target.result;
+                        validateJson();
+                    };
+                    reader.readAsText(file);
+                }
+            });
+        }
+        
+        function loadTemplate() {
+            const template = document.getElementById('sampleJson').textContent;
+            document.getElementById('tenant_data').value = template;
+            validateJson();
+        }
+        
+        function validateJson() {
+            const textarea = document.getElementById('tenant_data');
+            const validation = document.getElementById('jsonValidation');
+            const tenantCount = document.getElementById('tenantCount');
+            
+            try {
+                const data = JSON.parse(textarea.value);
+                
+                if (!Array.isArray(data)) {
+                    throw new Error('Data must be an array');
+                }
+                
+                if (data.length === 0) {
+                    throw new Error('Array cannot be empty');
+                }
+                
+                // Validate each tenant object
+                for (let i = 0; i < data.length; i++) {
+                    const tenant = data[i];
+                    if (!tenant.utr_number || !tenant.amount || !tenant.date) {
+                        throw new Error(`Tenant ${i + 1} missing required fields (utr_number, amount, date)`);
+                    }
+                }
+                
+                currentTenantData = data;
+                
+                validation.innerHTML = `
+                    <div class="alert alert-success">
+                        <i class="fas fa-check-circle"></i> Valid JSON format
+                    </div>
+                `;
+                
+                tenantCount.innerHTML = `
+                    <div class="alert alert-info">
+                        <i class="fas fa-users"></i> <strong>${data.length}</strong> tenant${data.length > 1 ? 's' : ''} ready for processing
+                    </div>
+                `;
+                
+                return true;
+                
+            } catch (error) {
+                validation.innerHTML = `
+                    <div class="alert alert-danger">
+                        <i class="fas fa-exclamation-triangle"></i> ${error.message}
+                    </div>
+                `;
+                
+                tenantCount.innerHTML = '';
+                currentTenantData = [];
+                return false;
+            }
+        }
+        
+        // Form submission
+        function setupFormSubmission() {
+            document.getElementById('multiTenantForm').addEventListener('submit', async function(e) {
+                e.preventDefault();
+                
+                if (!validateJson()) {
+                    showToast('Please fix JSON validation errors', 'error');
+                    return;
+                }
+                
+                const formData = new FormData();
+                formData.append('tenant_data', document.getElementById('tenant_data').value);
+                formData.append('landlord_statement', document.getElementById('landlord_statement').files[0]);
+                
+                // Show loading state
+                document.getElementById('submitText').style.display = 'none';
+                document.getElementById('loadingText').style.display = 'inline';
+                document.getElementById('submitBtn').disabled = true;
+                
+                try {
+                    const response = await fetch('/upload-multi', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        displayResults(result);
+                        showToast('Processing completed successfully!', 'success');
+                    } else {
+                        showToast(`Error: ${result.error}`, 'error');
+                    }
+                    
+                } catch (error) {
+                    showToast(`Request failed: ${error.message}`, 'error');
+                } finally {
+                    // Reset loading state
+                    document.getElementById('submitText').style.display = 'inline';
+                    document.getElementById('loadingText').style.display = 'none';
+                    document.getElementById('submitBtn').disabled = false;
+                }
+            });
+        }
+        
+        // Display results
+        function displayResults(result) {
+            const resultsSection = document.getElementById('resultsSection');
+            const resultsSummary = document.getElementById('resultsSummary');
+            const resultsDetails = document.getElementById('resultsDetails');
+            
+            // Summary
+            const summary = result.summary;
+            resultsSummary.innerHTML = `
+                <div class="row text-center">
+                    <div class="col-md-3">
+                        <div class="card verified">
+                            <div class="card-body">
+                                <h3 class="text-success">${summary.verified_matches}</h3>
+                                <p class="mb-0">Verified</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="card partial">
+                            <div class="card-body">
+                                <h3 class="text-warning">${summary.partial_matches}</h3>
+                                <p class="mb-0">Partial</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="card no-match">
+                            <div class="card-body">
+                                <h3 class="text-danger">${summary.no_matches}</h3>
+                                <p class="mb-0">No Match</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="card error">
+                            <div class="card-body">
+                                <h3 class="text-muted">${summary.errors}</h3>
+                                <p class="mb-0">Errors</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Details
+            let detailsHtml = '';
+            result.results.forEach((tenant, index) => {
+                const statusClass = tenant.match_status.toLowerCase().replace('_', '-');
+                const statusIcon = getStatusIcon(tenant.match_status);
+                
+                detailsHtml += `
+                    <div class="card result-card ${statusClass} mb-3">
+                        <div class="card-header">
+                            <h6 class="mb-0">
+                                ${statusIcon} Tenant ${tenant.tenant_id}
+                                <span class="badge bg-secondary float-end">${tenant.match_status}</span>
+                            </h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <strong>UTR Match:</strong> ${tenant.utr_match ? '✅' : '❌'}<br>
+                                    <strong>Amount Match:</strong> ${tenant.amount_match ? '✅' : '❌'}<br>
+                                    <strong>Date Match:</strong> ${tenant.date_match ? '✅' : '❌'}<br>
+                                    <strong>Confidence:</strong> ${(tenant.overall_confidence * 100).toFixed(1)}%
+                                </div>
+                                <div class="col-md-6">
+                                    <strong>Tenant UTR:</strong> ${tenant.tenant_utr || 'N/A'}<br>
+                                    <strong>Bank UTR:</strong> ${tenant.landlord_utr || 'N/A'}<br>
+                                    <strong>Amount:</strong> ₹${tenant.tenant_amount || 'N/A'}<br>
+                                    <strong>Date:</strong> ${tenant.tenant_date || 'N/A'}
+                                </div>
+                            </div>
+                            ${tenant.landlord_extraction_notes ? `
+                                <div class="mt-2">
+                                    <small class="text-muted">
+                                        <strong>Notes:</strong> ${tenant.landlord_extraction_notes}
+                                    </small>
+                                </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                `;
+            });
+            
+            resultsDetails.innerHTML = detailsHtml;
+            resultsSection.style.display = 'block';
+            
+            // Scroll to results
+            resultsSection.scrollIntoView({ behavior: 'smooth' });
+        }
+        
+        function getStatusIcon(status) {
+            switch (status) {
+                case 'VERIFIED': return '<i class="fas fa-check-circle text-success"></i>';
+                case 'PARTIAL': return '<i class="fas fa-exclamation-triangle text-warning"></i>';
+                case 'NO_MATCH': return '<i class="fas fa-times-circle text-danger"></i>';
+                case 'ERROR': return '<i class="fas fa-bug text-muted"></i>';
+                default: return '<i class="fas fa-question-circle text-secondary"></i>';
+            }
+        }
+        
+        // Utility functions
+        function showToast(message, type) {
+            const toastHtml = `
+                <div class="toast-container position-fixed top-0 end-0 p-3">
+                    <div class="toast show" role="alert">
+                        <div class="toast-header">
+                            <strong class="me-auto">${type === 'success' ? 'Success' : 'Error'}</strong>
+                            <button type="button" class="btn-close" data-bs-dismiss="toast"></button>
+                        </div>
+                        <div class="toast-body">
+                            ${message}
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            document.body.insertAdjacentHTML('beforeend', toastHtml);
+            
+            // Auto remove after 5 seconds
+            setTimeout(() => {
+                const toasts = document.querySelectorAll('.toast-container');
+                if (toasts.length > 0) {
+                    toasts[toasts.length - 1].remove();
+                }
+            }, 5000);
+        }
+    </script>
+</body>
+</html>

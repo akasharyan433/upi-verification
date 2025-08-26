@@ -6,14 +6,40 @@
     <title>UPI Transaction Verifier</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .navigation-tabs {
+            border-bottom: 2px solid #dee2e6;
+        }
+        .nav-link.active {
+            background-color: #0d6efd !important;
+            color: white !important;
+        }
+    </style>
 </head>
 <body>
-    <div class="container mt-5">
+    <div class="container mt-4">
+        <!-- Navigation -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <nav class="navigation-tabs">
+                    <div class="nav nav-tabs" id="nav-tab" role="tablist">
+                        <a class="nav-link active" href="{{ url_for('index') }}">
+                            <i class="fas fa-user"></i> Single Tenant
+                        </a>
+                        <a class="nav-link" href="{{ url_for('multi_tenant_page') }}">
+                            <i class="fas fa-users"></i> Multi-Tenant
+                        </a>
+                    </div>
+                </nav>
+            </div>
+        </div>
+
         <div class="row justify-content-center">
             <div class="col-md-8">
                 <div class="card shadow">
                     <div class="card-header bg-primary text-white">
-                        <h2 class="mb-0">🏠 UPI Transaction Verifier</h2>
+                        <h2 class="mb-0"><i class="fas fa-user"></i> UPI Transaction Verifier</h2>
                         <p class="mb-0">Verify rental payments by matching UTR numbers</p>
                     </div>
                     <div class="card-body">
@@ -35,12 +61,13 @@
                             <!-- Tenant Screenshot Upload -->
                             <div class="mb-4">
                                 <label for="tenant_screenshot" class="form-label">
-                                    <strong>📱 Tenant's Transaction Screenshot</strong>
+                                    <strong><i class="fas fa-mobile-alt"></i> Tenant's Transaction Screenshot</strong>
                                 </label>
                                 <div class="upload-area" id="tenant-drop-area">
                                     <input type="file" class="form-control" id="tenant_screenshot" 
                                            name="tenant_screenshot" accept="image/*" required>
                                     <div class="upload-text">
+                                        <p><i class="fas fa-cloud-upload-alt fa-2x mb-3"></i></p>
                                         <p>Click to select or drag & drop your transaction screenshot</p>
                                         <small class="text-muted">Supported: PNG, JPG, JPEG, WEBP, HEIC (Max 16MB)</small>
                                     </div>
@@ -51,12 +78,13 @@
                             <!-- Landlord Screenshot Upload -->
                             <div class="mb-4">
                                 <label for="landlord_screenshot" class="form-label">
-                                    <strong>🏦 Landlord's Bank Statement</strong>
+                                    <strong><i class="fas fa-university"></i> Landlord's Bank Statement</strong>
                                 </label>
                                 <div class="upload-area" id="landlord-drop-area">
                                     <input type="file" class="form-control" id="landlord_screenshot" 
                                            name="landlord_screenshot" accept="image/*,.pdf" required>
                                     <div class="upload-text">
+                                        <p><i class="fas fa-cloud-upload-alt fa-2x mb-3"></i></p>
                                         <p>Click to select or drag & drop bank statement</p>
                                         <small class="text-muted">Supported: PNG, JPG, JPEG, WEBP, HEIC, PDF (Max 16MB)</small>
                                     </div>
@@ -67,7 +95,7 @@
                             <!-- Submit Button -->
                             <div class="d-grid">
                                 <button type="submit" class="btn btn-primary btn-lg" id="submitBtn">
-                                    <span id="submitText">🔍 Verify Transaction</span>
+                                    <span id="submitText"><i class="fas fa-search"></i> Verify Transaction</span>
                                     <span id="loadingText" style="display: none;">
                                         <span class="spinner-border spinner-border-sm me-2"></span>
                                         Processing...
@@ -79,12 +107,13 @@
                         
                         <!-- Instructions -->
                         <div class="mt-4 p-3 bg-light rounded">
-                            <h6>📋 Instructions:</h6>
+                            <h6><i class="fas fa-list-ul"></i> Instructions:</h6>
                             <ul class="mb-0 small">
                                 <li><strong>Tenant:</strong> Upload screenshot from UPI app (PhonePe, Google Pay, etc.)</li>
                                 <li><strong>Landlord:</strong> Upload bank statement (screenshot or PDF)</li>
                                 <li>Ensure UTR numbers are clearly visible in both files</li>
                                 <li><strong>Supported formats:</strong> PNG, JPG, JPEG, WEBP, HEIC, PDF</li>
+                                <li><strong>For multiple tenants:</strong> Use the <a href="{{ url_for('multi_tenant_page') }}">Multi-Tenant</a> page</li>
                             </ul>
                         </div>
                         
